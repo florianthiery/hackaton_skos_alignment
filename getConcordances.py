@@ -35,6 +35,7 @@ session.headers.update({"Accept": "application/json"})
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def slugify(uri: str) -> str:
     """Turn a URI into a safe filename slug."""
     return re.sub(r"[^\w\-]", "_", uri)[:80]
@@ -49,7 +50,7 @@ def fetch_json(url: str, params: dict = None, retries: int = 3) -> list | dict:
             return r.json()
         except Exception as e:
             print(f"  [attempt {attempt+1}/{retries}] Error: {e}")
-            time.sleep(2 ** attempt)
+            time.sleep(2**attempt)
     raise RuntimeError(f"Failed to fetch {url}")
 
 
@@ -105,6 +106,7 @@ def stream_ndjson_download(endpoint: str, out_path: Path, params: dict = None):
 # Step 1: Vocabularies (concept schemes)
 # ---------------------------------------------------------------------------
 
+
 def fetch_vocabularies():
     out = DATA_DIR / "vocabularies.json"
     if out.exists() and out.stat().st_size > 0:
@@ -121,6 +123,7 @@ def fetch_vocabularies():
 # ---------------------------------------------------------------------------
 # Step 2: Concordances
 # ---------------------------------------------------------------------------
+
 
 def fetch_concordances():
     out = DATA_DIR / "concordances.json"
@@ -139,20 +142,76 @@ def fetch_concordances():
 # Step 3: Mappings (large — streamed as NDJSON)
 # ---------------------------------------------------------------------------
 
-def fetch_mappings():
+
+def fetch_mappings(page_size: int = 2000):
+    """
+    Paginated, resumable download of all mappings as NDJSON.
+
+    Writes one JSON object per line to data/mappings.ndjson.
+    A small state file (mappings.offset) tracks progress so that the
+    download can be resumed after a network interruption — just run the
+    script again and it picks up where it stopped.
+    """
     out = DATA_DIR / "mappings.ndjson"
-    if out.exists():
-        print(f"[SKIP] {out} already exists.")
+    state = DATA_DIR / "mappings.offset"
+    done_marker = DATA_DIR / "mappings.done"
+
+    if done_marker.exists():
+        print(f"[SKIP] {out} already complete.")
         return
 
-    print("\n=== Fetching mappings (streaming NDJSON) ===")
-    print("  This may take several minutes for ~1.1M records...")
-    stream_ndjson_download("mappings", out)
+    # Resume from last successful offset, or start from 0
+    offset = int(state.read_text()) if state.exists() else 0
+    mode = "a" if offset > 0 else "w"
+
+    print("\n=== Fetching mappings (paginated, resumable) ===")
+    if offset > 0:
+        print(f"  Resuming from offset {offset:,}")
+    else:
+        print("  Starting fresh. This may take several minutes for ~1.1M records.")
+
+    url = f"{BASE_URL}/mappings"
+    total_written = offset
+
+    with open(out, mode, encoding="utf-8") as f:
+        while True:
+            params = {"limit": page_size, "offset": offset}
+            try:
+                batch = fetch_json(url, params=params)
+            except Exception as e:
+                print(f"  [ERROR] Batch at offset {offset} failed: {e}")
+                print(f"  Progress saved. Re-run the script to resume.")
+                return
+
+            if not batch:
+                # No more records — we're done
+                done_marker.write_text("ok")
+                state.unlink(missing_ok=True)
+                print(f"  Done. {total_written:,} mappings written to {out}")
+                return
+
+            for record in batch:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+            f.flush()  # ensure data hits disk before we update the offset
+            total_written += len(batch)
+            offset += page_size
+            state.write_text(str(offset))
+
+            print(f"  ...{total_written:,} mappings written (offset {offset:,})")
+
+            if len(batch) < page_size:
+                # Last partial page — done
+                done_marker.write_text("ok")
+                state.unlink(missing_ok=True)
+                print(f"  Done. {total_written:,} mappings written to {out}")
+                return
 
 
 # ---------------------------------------------------------------------------
 # Step 4: Concepts per vocabulary (optional, can be large)
 # ---------------------------------------------------------------------------
+
 
 def fetch_concepts_for_voc(voc: dict):
     uri = voc.get("uri", "")
@@ -181,6 +240,7 @@ def fetch_all_concepts(vocs: list):
 # ---------------------------------------------------------------------------
 # Step 5: Build a simple edge list for graph construction
 # ---------------------------------------------------------------------------
+
 
 def build_edge_list():
     """
