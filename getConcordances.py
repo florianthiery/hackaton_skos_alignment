@@ -107,13 +107,13 @@ def stream_ndjson_download(endpoint: str, out_path: Path, params: dict = None):
 
 def fetch_vocabularies():
     out = DATA_DIR / "vocabularies.json"
-    if out.exists():
+    if out.exists() and out.stat().st_size > 0:
         print(f"[SKIP] {out} already exists.")
-        return json.loads(out.read_text())
+        return json.loads(out.read_text(encoding="utf-8"))
 
     print("\n=== Fetching vocabularies ===")
     vocs = fetch_paginated("voc", page_size=500)
-    out.write_text(json.dumps(vocs, ensure_ascii=False, indent=2))
+    out.write_text(json.dumps(vocs, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"  Saved {len(vocs)} vocabularies to {out}")
     return vocs
 
@@ -124,13 +124,13 @@ def fetch_vocabularies():
 
 def fetch_concordances():
     out = DATA_DIR / "concordances.json"
-    if out.exists():
+    if out.exists() and out.stat().st_size > 0:
         print(f"[SKIP] {out} already exists.")
-        return json.loads(out.read_text())
+        return json.loads(out.read_text(encoding="utf-8"))
 
     print("\n=== Fetching concordances ===")
     conc = fetch_paginated("concordances", page_size=200)
-    out.write_text(json.dumps(conc, ensure_ascii=False, indent=2))
+    out.write_text(json.dumps(conc, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"  Saved {len(conc)} concordances to {out}")
     return conc
 
@@ -236,8 +236,8 @@ def build_edge_list():
 if __name__ == "__main__":
     vocs = fetch_vocabularies()
     concordances = fetch_concordances()
-    #fetch_mappings()
-    #build_edge_list()
+    fetch_mappings()
+    build_edge_list()
 
     # Uncomment to also fetch all concept labels/notations (takes longer):
-    fetch_all_concepts(vocs)
+    # fetch_all_concepts(vocs)
